@@ -14,10 +14,11 @@ type OtherFileInfo          = Alphaleonis.Win32.Filesystem.FileInfo
 
 module internal Internals =
   let runningOnWindows = System.Environment.OSVersion.Platform = System.PlatformID.Win32NT
-
+  let inline doEither a b = if runningOnWindows then a () else b ()
+  let inline (=>) a f = fun () -> f a // sorry
 open Internals
 
-type FileSystemInfo internal (systemIO: Lazy<SystemIOFileSystemInfo>, other: Lazy<OtherFileSystemInfo>) =
+type [<AllowNullLiteral>] FileSystemInfo internal (systemIO: Lazy<SystemIOFileSystemInfo>, other: Lazy<OtherFileSystemInfo>) =
   
   internal new (file: OtherFileSystemInfo)    = FileSystemInfo(lazy null, lazy file)
   internal new (file: SystemIOFileSystemInfo) = FileSystemInfo(lazy file, lazy null)
@@ -56,7 +57,7 @@ and FileInfo internal (systemIO: Lazy<SystemIOFileInfo>, other:Lazy<OtherFileInf
     if runningOnWindows then other.Value.Directory |> DirectoryInfo
     else systemIO.Value.Directory |> DirectoryInfo
 
-and DirectoryInfo internal (systemIO : Lazy<SystemIODirectoryInfo>, other: Lazy<OtherDirectoryInfo>) =
+and [<AllowNullLiteral>] DirectoryInfo internal (systemIO : Lazy<SystemIODirectoryInfo>, other: Lazy<OtherDirectoryInfo>) =
   inherit FileSystemInfo(lazy (systemIO.Value :> _), lazy (other.Value :> _))
   
   internal new (directory: OtherDirectoryInfo)    = DirectoryInfo(lazy null, lazy directory)
@@ -69,20 +70,44 @@ and DirectoryInfo internal (systemIO : Lazy<SystemIODirectoryInfo>, other: Lazy<
      else systemIO.Value.EnumerateFiles() |> Seq.map FileInfo
   
   member x.EnumerateDirectories () =
-     if runningOnWindows then other.Value.EnumerateDirectories() |> Seq.map DirectoryInfo
-     else systemIO.Value.EnumerateDirectories() |> Seq.map DirectoryInfo
+     doEither
+      (other.Value.EnumerateDirectories    >> Seq.map DirectoryInfo)
+      (systemIO.Value.EnumerateDirectories >> Seq.map DirectoryInfo)
+    
+  member x.GetDirectories () =
+     doEither
+      (other.Value.GetDirectories    >> Array.map DirectoryInfo)
+      (systemIO.Value.GetDirectories >> Array.map DirectoryInfo)
   
   member x.EnumerateFileSystemInfos () =
-     if runningOnWindows then other.Value.EnumerateFileSystemInfos() |> Seq.map (FileSystemInfo.MakeFromOther)
-     else systemIO.Value.EnumerateFileSystemInfos() |> Seq.map (FileSystemInfo.MakeFromSystemIO)
-     
+     doEither
+      (other.Value.EnumerateFileSystemInfos    >> Seq.map FileSystemInfo.MakeFromOther)
+      (systemIO.Value.EnumerateFileSystemInfos >> Seq.map FileSystemInfo.MakeFromSystemIO)
+   
   member x.Create () =
     if runningOnWindows then other.Value.Create()
     else systemIO.Value.Create()
+
+  member x.Parent =
+    if runningOnWindows then 
+      if isNull other.Value.Parent then null
+      else (other.Value.Parent |> DirectoryInfo)
+    else 
+      if isNull systemIO.Value.Parent then null
+      else (systemIO.Value.Parent |> DirectoryInfo)
 
 module File =
   
   let AppendAllLines filename lines =
     (filename, lines)
     |> (if runningOnWindows then OtherFile.AppendAllLines else SystemIOFile.AppendAllLines)
-    
+  let Exists filename =
+    doEither
+      (filename => OtherFile.Exists)
+      (filename => SystemIOFile.Exists)
+
+module Directory =
+  let CreateDirectory name =
+      doEither
+        (name => OtherDirectory.CreateDirectory >> DirectoryInfo)
+        (name => SystemIODirectory.CreateDirectory >> DirectoryInfo)
