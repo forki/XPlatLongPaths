@@ -1,0 +1,5 @@
+REDIRECTS: ON
+NUGET
+  remote: https://www.nuget.org/api/v2
+    AlphaFS (2.0.1)
+    FSharp.Core (4.0.0.1)
