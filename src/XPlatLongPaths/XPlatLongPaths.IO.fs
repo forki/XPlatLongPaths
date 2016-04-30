@@ -1,11 +1,13 @@
 ﻿namespace XPlatLongPaths.IO
 
+type SystemIOPath           = System.IO.Path
 type SystemIOFile           = System.IO.File
 type SystemIODirectory      = System.IO.Directory
 type SystemIOFileSystemInfo = System.IO.FileSystemInfo
 type SystemIODirectoryInfo  = System.IO.DirectoryInfo
 type SystemIOFileInfo       = System.IO.FileInfo
 
+type OtherPath              = Alphaleonis.Win32.Filesystem.Path
 type OtherFile              = Alphaleonis.Win32.Filesystem.File
 type OtherDirectory         = Alphaleonis.Win32.Filesystem.Directory
 type OtherFileSystemInfo    = Alphaleonis.Win32.Filesystem.FileSystemInfo
@@ -22,6 +24,16 @@ type [<AllowNullLiteral>] FileSystemInfo internal (systemIO: Lazy<SystemIOFileSy
   
   internal new (file: OtherFileSystemInfo)    = FileSystemInfo(lazy null, lazy file)
   internal new (file: SystemIOFileSystemInfo) = FileSystemInfo(lazy file, lazy null)
+
+  static member internal MakeFromSystemIO(f:SystemIOFileSystemInfo) =
+    match f with
+    | :? SystemIOFileInfo      as f -> FileInfo(f)      :> FileSystemInfo
+    | :? SystemIODirectoryInfo as d -> DirectoryInfo(d) :> FileSystemInfo
+
+  static member internal MakeFromOther(f:OtherFileSystemInfo) =
+    match f with
+    | :? OtherFileInfo      as f -> FileInfo(f)      :> FileSystemInfo
+    | :? OtherDirectoryInfo as d -> DirectoryInfo(d) :> FileSystemInfo
   
   member x.FullName =
     if runningOnWindows then other.Value.FullName
@@ -35,15 +47,14 @@ type [<AllowNullLiteral>] FileSystemInfo internal (systemIO: Lazy<SystemIOFileSy
     if runningOnWindows then other.Value.Exists
     else systemIO.Value.Exists
 
-  static member internal MakeFromSystemIO(f:SystemIOFileSystemInfo) =
-    match f with
-    | :? SystemIOFileInfo      as f -> FileInfo(f)      :> FileSystemInfo
-    | :? SystemIODirectoryInfo as d -> DirectoryInfo(d) :> FileSystemInfo
-
-  static member internal MakeFromOther(f:OtherFileSystemInfo) =
-    match f with
-    | :? OtherFileInfo      as f -> FileInfo(f)      :> FileSystemInfo
-    | :? OtherDirectoryInfo as d -> DirectoryInfo(d) :> FileSystemInfo
+  member x.Attributes
+    with get () =
+      if runningOnWindows then other.Value.Attributes else systemIO.Value.Attributes
+    and set(value) =
+      if runningOnWindows then other.Value.Attributes <- value else systemIO.Value.Attributes <- value
+  
+  member x.Delete () =
+    doEither other.Value.Delete systemIO.Value.Delete
 
 and FileInfo internal (systemIO: Lazy<SystemIOFileInfo>, other:Lazy<OtherFileInfo>) =
   inherit FileSystemInfo(lazy (systemIO.Value :> _), lazy (other.Value :> _))
@@ -57,6 +68,14 @@ and FileInfo internal (systemIO: Lazy<SystemIOFileInfo>, other:Lazy<OtherFileInf
     if runningOnWindows then other.Value.Directory |> DirectoryInfo
     else systemIO.Value.Directory |> DirectoryInfo
 
+  member x.Delete () =
+    if runningOnWindows then other.Value.Delete() else systemIO.Value.Delete()
+
+  member x.CopyTo (destination: string, overwrite: bool) =
+    doEither
+      ((destination, overwrite) => other.Value.CopyTo    >> FileInfo)
+      ((destination, overwrite) => systemIO.Value.CopyTo >> FileInfo)
+
 and [<AllowNullLiteral>] DirectoryInfo internal (systemIO : Lazy<SystemIODirectoryInfo>, other: Lazy<OtherDirectoryInfo>) =
   inherit FileSystemInfo(lazy (systemIO.Value :> _), lazy (other.Value :> _))
   
@@ -66,9 +85,15 @@ and [<AllowNullLiteral>] DirectoryInfo internal (systemIO : Lazy<SystemIODirecto
   new (fullPath:string) = DirectoryInfo(lazy SystemIODirectoryInfo(fullPath), lazy OtherDirectoryInfo(fullPath))
   
   member x.EnumerateFiles () =
-     if runningOnWindows then other.Value.EnumerateFiles() |> Seq.map FileInfo
-     else systemIO.Value.EnumerateFiles() |> Seq.map FileInfo
-  
+     doEither 
+      (other.Value.EnumerateFiles    >> Seq.map FileInfo)
+      (systemIO.Value.EnumerateFiles >> Seq.map FileInfo)
+    
+  member x.EnumerateFiles (searchPattern) =
+    doEither
+      (searchPattern => other.Value.EnumerateFiles    >> Seq.map FileInfo)
+      (searchPattern => systemIO.Value.EnumerateFiles >> Seq.map FileInfo)
+
   member x.EnumerateDirectories () =
      doEither
       (other.Value.EnumerateDirectories    >> Seq.map DirectoryInfo)
@@ -78,6 +103,16 @@ and [<AllowNullLiteral>] DirectoryInfo internal (systemIO : Lazy<SystemIODirecto
      doEither
       (other.Value.GetDirectories    >> Array.map DirectoryInfo)
       (systemIO.Value.GetDirectories >> Array.map DirectoryInfo)
+      
+  member x.GetFiles () =
+     doEither
+      (other.Value.GetFiles    >> Array.map FileInfo)
+      (systemIO.Value.GetFiles >> Array.map FileInfo)
+        
+  member x.GetFiles (pattern: string) =
+     doEither
+      (pattern => other.Value.GetFiles    >> Array.map FileInfo)
+      (pattern => systemIO.Value.GetFiles >> Array.map FileInfo)
   
   member x.EnumerateFileSystemInfos () =
      doEither
@@ -96,18 +131,78 @@ and [<AllowNullLiteral>] DirectoryInfo internal (systemIO : Lazy<SystemIODirecto
       if isNull systemIO.Value.Parent then null
       else (systemIO.Value.Parent |> DirectoryInfo)
 
-module File =
+type File =
   
-  let AppendAllLines filename lines =
+  static member AppendAllLines (filename, lines) =
     (filename, lines)
     |> (if runningOnWindows then OtherFile.AppendAllLines else SystemIOFile.AppendAllLines)
-  let Exists filename =
+
+  static member Exists filename =
     doEither
       (filename => OtherFile.Exists)
       (filename => SystemIOFile.Exists)
+  
+  static member ReadAllText filename =
+    doEither
+      (filename => OtherFile.ReadAllText)
+      (filename => SystemIOFile.ReadAllText)
+  
+  static member WriteAllText (filename, text) =
+    doEither
+      ((filename,text) => OtherFile.WriteAllText)
+      ((filename,text) => SystemIOFile.WriteAllText)
 
-module Directory =
-  let CreateDirectory name =
-      doEither
-        (name => OtherDirectory.CreateDirectory >> DirectoryInfo)
-        (name => SystemIODirectory.CreateDirectory >> DirectoryInfo)
+  static member Open (name, fileMode) =
+    doEither
+      ((name, fileMode) => OtherFile.Open)
+      ((name, fileMode) => SystemIOFile.Open)
+
+  static member Delete name =
+    doEither
+      (name => OtherFile.Delete)
+      (name => SystemIOFile.Delete)
+
+
+type Directory =
+
+  static member CreateDirectory name =
+    doEither
+      (name => OtherDirectory.CreateDirectory    >> DirectoryInfo)
+      (name => SystemIODirectory.CreateDirectory >> DirectoryInfo)
+
+  static member Exists name =
+    doEither
+      (name => OtherDirectory.Exists)
+      (name => SystemIODirectory.Exists)
+
+  static member EnumerateFiles (path: string, pattern, searchOption) =
+    doEither
+      ((path, pattern, searchOption) => OtherDirectory.EnumerateFiles)
+      ((path, pattern, searchOption) => SystemIODirectory.EnumerateFiles)
+  
+  static member EnumerateDirectories (path: string, pattern, searchOption) =
+    doEither
+      ((path, pattern, searchOption) => OtherDirectory.EnumerateDirectories)
+      ((path, pattern, searchOption) => SystemIODirectory.EnumerateDirectories)
+  
+type Path =
+  
+  static member GetDirectoryName fullPath =
+    doEither
+      (fullPath => OtherPath.GetDirectoryName)
+      (fullPath => SystemIOPath.GetDirectoryName)
+
+  static member GetExtension fullPath =
+    doEither
+      (fullPath => OtherPath.GetExtension)
+      (fullPath => SystemIOPath.GetExtension)
+
+  static member IsPathRooted path =
+    doEither
+      (path => OtherPath.IsPathRooted)
+      (path => SystemIOPath.IsPathRooted)
+  
+  static member GetFileNameWithoutExtension filename =
+    doEither
+      (filename => OtherPath.GetFileNameWithoutExtension)
+      (filename => SystemIOPath.GetFileNameWithoutExtension)
