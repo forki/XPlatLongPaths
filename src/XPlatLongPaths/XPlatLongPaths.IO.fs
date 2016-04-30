@@ -26,6 +26,10 @@ type FileSystemInfo internal (systemIO: Lazy<SystemIOFileSystemInfo>, other: Laz
     if runningOnWindows then other.Value.FullName
     else systemIO.Value.FullName
 
+  member x.Name =
+    if runningOnWindows then other.Value.Name
+    else systemIO.Value.Name
+
   member x.Exists =
     if runningOnWindows then other.Value.Exists
     else systemIO.Value.Exists
