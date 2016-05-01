@@ -67,6 +67,9 @@ and FileInfo internal (systemIO: Lazy<SystemIOFileInfo>, other:Lazy<OtherFileInf
   member x.Directory =
     if runningOnWindows then other.Value.Directory |> DirectoryInfo
     else systemIO.Value.Directory |> DirectoryInfo
+  member x.DirectoryName =
+    if runningOnWindows then other.Value.DirectoryName
+    else systemIO.Value.DirectoryName
   member x.Extension =
     if runningOnWindows then other.Value.Extension
     else systemIO.Value.Extension
@@ -96,8 +99,8 @@ and [<AllowNullLiteral>] DirectoryInfo internal (systemIO : Lazy<SystemIODirecto
   
   member x.EnumerateFiles () =
      doEither 
-      (other.Value.EnumerateFiles    >> Seq.map FileInfo)
-      (systemIO.Value.EnumerateFiles >> Seq.map FileInfo)
+      (fun () -> other.Value.EnumerateFiles()    |> Seq.map FileInfo)
+      (fun () -> systemIO.Value.EnumerateFiles() |> Seq.map FileInfo)
     
   member x.EnumerateFiles (searchPattern) =
     doEither
@@ -106,24 +109,24 @@ and [<AllowNullLiteral>] DirectoryInfo internal (systemIO : Lazy<SystemIODirecto
 
   member x.EnumerateDirectories () =
      doEither
-      (other.Value.EnumerateDirectories    >> Seq.map DirectoryInfo)
-      (systemIO.Value.EnumerateDirectories >> Seq.map DirectoryInfo)
+      (fun () -> other.Value.EnumerateDirectories()    |> Seq.map DirectoryInfo)
+      (fun () -> systemIO.Value.EnumerateDirectories() |> Seq.map DirectoryInfo)
     
   member x.GetDirectories () =
      doEither
-      (other.Value.GetDirectories    >> Array.map DirectoryInfo)
-      (systemIO.Value.GetDirectories >> Array.map DirectoryInfo)
+      (fun () -> other.Value.GetDirectories()    |> Array.map DirectoryInfo)
+      (fun () -> systemIO.Value.GetDirectories() |> Array.map DirectoryInfo)
        
   member x.GetDirectories searchPattern =
      doEither
       (searchPattern => other.Value.GetDirectories    >> Array.map DirectoryInfo)
       (searchPattern => systemIO.Value.GetDirectories >> Array.map DirectoryInfo)
-      
+
   member x.GetFiles () =
      doEither
-      (other.Value.GetFiles    >> Array.map FileInfo)
-      (systemIO.Value.GetFiles >> Array.map FileInfo)
-        
+      (fun () -> other.Value.GetFiles()    |> Array.map FileInfo)
+      (fun () -> systemIO.Value.GetFiles() |> Array.map FileInfo)
+
   member x.GetFiles (pattern: string) =
      doEither
       (pattern => other.Value.GetFiles    >> Array.map FileInfo)
@@ -136,8 +139,8 @@ and [<AllowNullLiteral>] DirectoryInfo internal (systemIO : Lazy<SystemIODirecto
   
   member x.EnumerateFileSystemInfos () =
      doEither
-      (other.Value.EnumerateFileSystemInfos    >> Seq.map FileSystemInfo.MakeFromOther)
-      (systemIO.Value.EnumerateFileSystemInfos >> Seq.map FileSystemInfo.MakeFromSystemIO)
+      (fun () -> other.Value.EnumerateFileSystemInfos()    |> Seq.map FileSystemInfo.MakeFromOther)
+      (fun () -> systemIO.Value.EnumerateFileSystemInfos() |> Seq.map FileSystemInfo.MakeFromSystemIO)
         
   member x.CreateSubdirectory (path: string) =
      doEither
@@ -161,6 +164,11 @@ type File =
     doEither
       ((filename, date) => OtherFile.SetLastWriteTimeUtc)
       ((filename, date) => SystemIOFile.SetLastWriteTimeUtc)
+  
+  static member SetLastWriteTime (filename, date) =
+    doEither
+      ((filename, date) => OtherFile.SetLastWriteTime)
+      ((filename, date) => SystemIOFile.SetLastWriteTime)
   
   static member AppendAllLines (filename, lines) =
     doEither
@@ -202,12 +210,32 @@ type File =
       ((name, fileMode) => OtherFile.Open)
       ((name, fileMode) => SystemIOFile.Open)
 
+  static member Open (name, fileMode, access, share: System.IO.FileShare) =
+    doEither
+      ((name, fileMode, access, share) => OtherFile.Open)
+      ((name, fileMode, access, share) => SystemIOFile.Open)
+
   static member Delete name =
     doEither
       (name => OtherFile.Delete)
       (name => SystemIOFile.Delete)
 
+  static member Create name =
+    doEither
+      (name => OtherFile.Create)
+      (name => SystemIOFile.Create)
 
+  static member OpenRead name =
+    doEither
+      (name => OtherFile.OpenRead)
+      (name => SystemIOFile.OpenRead)
+
+
+  static member Move (source: string, target) =
+    doEither
+      ((source, target) => OtherFile.Move)
+      ((source, target) => SystemIOFile.Move)
+  
 type Directory =
 
   static member CreateDirectory name =
@@ -219,6 +247,16 @@ type Directory =
     doEither
       (name => OtherDirectory.Exists)
       (name => SystemIODirectory.Exists)
+
+  static member Delete name =
+    doEither
+      (name => OtherDirectory.Delete)
+      (name => SystemIODirectory.Delete)
+
+  static member Delete (name, recursive: bool) =
+    doEither
+      ((name, recursive) => OtherDirectory.Delete)
+      ((name, recursive) => SystemIODirectory.Delete)
 
   static member EnumerateFiles (path: string, pattern, searchOption) =
     doEither
@@ -234,6 +272,11 @@ type Directory =
     doEither
       ((path, pattern, searchOption) => OtherDirectory.EnumerateDirectories)
       ((path, pattern, searchOption) => SystemIODirectory.EnumerateDirectories)
+  
+  static member Move (source: string, target) =
+    doEither
+      ((source, target) => OtherDirectory.Move)
+      ((source, target) => SystemIODirectory.Move)
   
 type Path =
   
@@ -266,6 +309,9 @@ type Path =
     doEither
       (path => OtherPath.GetFullPath)
       (path => SystemIOPath.GetFullPath)
+
+  static member GetTempPath () =
+    doEither OtherPath.GetTempPath SystemIOPath.GetTempPath
 
   static member Combine ([<System.ParamArray>]paths) =
     doEither
